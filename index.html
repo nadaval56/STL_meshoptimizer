@@ -117,7 +117,11 @@
 
   .slider-row{display:flex;align-items:baseline;justify-content:space-between;margin-bottom:9px}
   .slider-row label{font-size:13px;color:var(--muted)}
-  .slider-val{font-family:var(--mono);font-size:15px;color:var(--text);font-weight:500}
+  .slider-val{font-family:var(--mono);font-size:15px;color:var(--text);font-weight:500;display:flex;align-items:baseline;gap:5px}
+  .slider-val input{width:72px;font-family:var(--mono);font-size:15px;font-weight:500;color:var(--text);
+    background:var(--panel-2);border:1px solid var(--line);border-radius:7px;padding:5px 8px;text-align:end}
+  .slider-val input:focus-visible{outline:2px solid var(--accent);outline-offset:1px}
+  .slider-val .unit{font-family:var(--mono);font-size:11px;color:var(--muted)}
   input[type=range]{width:100%;-webkit-appearance:none;appearance:none;height:4px;
     background:var(--line);border-radius:3px;outline:none}
   input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;width:16px;height:16px;
@@ -229,6 +233,18 @@
           <input type="checkbox" id="lockBorder" checked>
           <span>נעילת גבולות — שומר על הקצוות ומונע חורים. מומלץ להדפסה ולקובץ "חוקי" יותר.</span>
         </label>
+        <label class="check-row" for="repair">
+          <input type="checkbox" id="repair" checked>
+          <span>תיקון רשת בטוח — מאחה סדקים ומסיר פאות כפולות/מנוונות (מפחית non-manifold).</span>
+        </label>
+      </div>
+
+      <div class="block" id="sizeBlock" hidden>
+        <div class="slider-row">
+          <label for="sizeInput">גודל לייצוא — צד ארוך</label>
+          <span class="slider-val"><input type="number" id="sizeInput" min="0.1" step="0.1"><span class="unit">מ"מ</span></span>
+        </div>
+        <div class="target-line" id="sizeLine">—</div>
       </div>
 
       <button class="btn btn-primary" id="runBtn" disabled>הקטנת פאות</button>
@@ -251,8 +267,10 @@
       <p class="hint">
         <b>מנוע meshoptimizer:</b> הדילול רץ ב‑Web Worker (לא מקפיא את הטאב) ומהיר בהרבה
         מהמנוע הקודם, גם על מודלים של מאות אלפי פאות.<br><br>
-        <b>קובץ "חוקי" יותר:</b> משולשים מנוונים (שטח אפס) מסוננים אוטומטית, ו"נעילת גבולות"
-        מונעת חורים חדשים בקצוות. חורים שכבר קיימים בקובץ המקורי עדיין דורשים "תיקון" ב‑slicer/3D&nbsp;Builder.<br><br>
+        <b>תיקון בטוח:</b> מאחה סדקים זעירים ומסיר פאות כפולות/מנוונות — מפחית אזהרות
+        non-manifold. <b>הערה:</b> חיתוכי‑חלקים וחורים גדולים שכבר קיימים במקור עדיין דורשים
+        "Repair" בסלייסר/3D&nbsp;Builder (בטוח לשימוש), או remesh מלא.<br><br>
+        <b>גודל לייצוא:</b> הזינו את אורך הצד הארוך במ"מ — הקובץ יוקטן/יוגדל בקנה‑מידה אחיד.<br><br>
         <b>להדפסה:</b> אל תגזימו בדילול — פינות חדות מתעגלות. בדקו ב‑slicer לפני שליחה למדפסת.
       </p>
     </aside>
@@ -295,6 +313,7 @@
   const mat=new THREE.MeshStandardMaterial({color:0x63d3c7,roughness:0.55,metalness:0.05,
     flatShading:false,wireframe:false});
   let mesh=null, baseGeo=null, origFaces=0, origSize=0, lastBlob=null, wire=false;
+  let origDims=new THREE.Vector3(1,1,1), origLongest=1;
 
   function resize(){
     const w=viewport.clientWidth,h=viewport.clientHeight;
@@ -324,9 +343,10 @@
   const workerSrc=`
     import { MeshoptSimplifier } from '${MESHOPT_URL}';
 
-    // Drop triangles that are invalid for export: repeated indices or ~zero area.
-    // These are what tools like 3D Builder flag as a non-manifold / "invalid" mesh.
-    function cleanDegenerate(idx, pos){
+    // Safe mesh cleanup: drop triangles that are invalid for export — repeated
+    // indices, ~zero area, or exact duplicate faces (same 3 vertices, any winding).
+    // These are what tools like 3D Builder / slicers flag as non-manifold edges.
+    function cleanMesh(idx, pos){
       let minx=Infinity,miny=Infinity,minz=Infinity,maxx=-Infinity,maxy=-Infinity,maxz=-Infinity;
       for(let i=0;i<pos.length;i+=3){
         const x=pos[i],y=pos[i+1],z=pos[i+2];
@@ -338,6 +358,7 @@
       const diag=Math.sqrt(dx*dx+dy*dy+dz*dz)||1;
       const eps=diag*diag*1e-12; // on squared cross-product length (~ (2*area)^2)
       const out=new Uint32Array(idx.length);
+      const seen=new Set();
       let k=0;
       for(let i=0;i<idx.length;i+=3){
         const a=idx[i],b=idx[i+1],c=idx[i+2];
@@ -346,6 +367,14 @@
         const vx=pos[c*3]-pos[a*3], vy=pos[c*3+1]-pos[a*3+1], vz=pos[c*3+2]-pos[a*3+2];
         const nx=uy*vz-uz*vy, ny=uz*vx-ux*vz, nz=ux*vy-uy*vx;
         if(nx*nx+ny*ny+nz*nz<=eps) continue;
+        // duplicate-face key: the three indices sorted ascending
+        let lo=a,mi=b,hi=c,t;
+        if(lo>mi){t=lo;lo=mi;mi=t;}
+        if(mi>hi){t=mi;mi=hi;hi=t;}
+        if(lo>mi){t=lo;lo=mi;mi=t;}
+        const key=lo+'_'+mi+'_'+hi;
+        if(seen.has(key)) continue;
+        seen.add(key);
         out[k++]=a; out[k++]=b; out[k++]=c;
       }
       return out.slice(0,k);
@@ -370,7 +399,7 @@
             self.postMessage({ id, progress:p/passes });
           }
         }
-        idx=cleanDegenerate(idx, positions);
+        idx=cleanMesh(idx, positions);
         self.postMessage({ id, ok:true, indices:idx, error:err }, [idx.buffer]);
       } catch (err) {
         self.postMessage({ id, ok:false, message: String((err && err.message) || err) });
@@ -413,6 +442,10 @@
     baseGeo=mergeVertices(geo); baseGeo.computeVertexNormals();
     origFaces=faceCount(baseGeo); origSize=size;
 
+    baseGeo.computeBoundingBox();
+    baseGeo.boundingBox.getSize(origDims);
+    origLongest=Math.max(origDims.x,origDims.y,origDims.z)||1;
+
     if(mesh) scene.remove(mesh);
     mesh=new THREE.Mesh(baseGeo.clone(),mat); scene.add(mesh); frame(baseGeo);
 
@@ -422,7 +455,9 @@
     $('chipMeta').textContent=origFaces.toLocaleString()+' פאות · '+human(size);
     $('runBtn').disabled=false; $('dlBtn').disabled=true;
     $('stats').classList.remove('show'); lastBlob=null;
-    updateTarget();
+    $('sizeBlock').hidden=false;
+    $('sizeInput').value=(+origLongest.toFixed(2));
+    updateTarget(); updateSizeLine();
     getWorker(); // start loading the meshopt WASM in the background while the user picks a ratio
   }
   function readFile(file){
@@ -440,6 +475,16 @@
     const t=Math.max(4,Math.floor(origFaces*keepRatio()));
     $('targetLine').innerHTML='יעד: <b>'+t.toLocaleString()+'</b> פאות (מתוך '+origFaces.toLocaleString()+')';
   }
+  function scaleFactor(){
+    const v=+$('sizeInput').value;
+    return (isFinite(v)&&v>0) ? v/origLongest : 1;
+  }
+  function updateSizeLine(){
+    if(!baseGeo){$('sizeLine').textContent='—';return;}
+    const f=scaleFactor(), m=v=>v.toFixed(1);
+    const tag = Math.abs(f-1)<1e-4 ? '' : ' (×'+f.toFixed(3)+')';
+    $('sizeLine').innerHTML='ייצוא: <b>'+m(origDims.x*f)+' × '+m(origDims.y*f)+' × '+m(origDims.z*f)+'</b> מ"מ'+tag;
+  }
   function setProgress(pct,label){
     $('procFill').style.width=pct+'%';
     $('procPct').textContent=pct+'%';
@@ -452,23 +497,35 @@
     processing.classList.add('show');
     try{
       const keep=keepRatio();
+      // Safe repair: re-weld with a size-relative tolerance to stitch micro-cracks
+      // before simplifying (duplicate/degenerate faces are cleaned later in the worker).
+      let srcGeo=baseGeo;
+      if($('repair').checked){
+        const relTol=Math.max(origDims.length()*1e-4,1e-5);
+        setProgress(4,'מאחה סדקים…');
+        srcGeo=mergeVertices(baseGeo,relTol);
+      }
       // targetError=1 lets meshopt reach the requested face count (slider drives it).
-      // Everything goes through the worker so the degenerate-triangle cleanup always runs.
-      const targetFaces=keep<1?Math.max(4,Math.floor(origFaces*keep)):origFaces;
+      // Everything goes through the worker so the mesh cleanup always runs.
+      const targetFaces=keep<1?Math.max(4,Math.floor(origFaces*keep)):faceCount(srcGeo);
       const lockBorder=$('lockBorder').checked;
       const res=await simplifyInWorker(
-        baseGeo.index.array, baseGeo.attributes.position.array, targetFaces, 1, lockBorder,
-        p=>setProgress(Math.round(p*88),'מדלל פאות…'));
+        srcGeo.index.array, srcGeo.attributes.position.array, targetFaces, 1, lockBorder,
+        p=>setProgress(Math.round(4+p*84),'מדלל פאות…'));
 
       setProgress(92,'מייצא STL…');
       const g=new THREE.BufferGeometry();
-      g.setAttribute('position', baseGeo.attributes.position.clone());
+      g.setAttribute('position', srcGeo.attributes.position.clone());
       g.setIndex(new THREE.BufferAttribute(res.indices,1));
       g.computeVertexNormals();
       scene.remove(mesh);
       mesh=new THREE.Mesh(g,mat.clone()); mesh.material.wireframe=wire; scene.add(mesh);
 
-      const result=new STLExporter().parse(mesh,{binary:true});
+      // apply the chosen export size as a uniform scale (export only; preview stays as-is)
+      const exportMesh=new THREE.Mesh(g,mat);
+      exportMesh.scale.setScalar(scaleFactor());
+      exportMesh.updateMatrixWorld(true);
+      const result=new STLExporter().parse(exportMesh,{binary:true});
       lastBlob=new Blob([result instanceof DataView?result.buffer:result],
         {type:'application/octet-stream'});
 
@@ -503,6 +560,7 @@
     p.classList.add('active');
     $('keep').value=Math.round(+p.dataset.keep*100); updateTarget();
   }));
+  $('sizeInput').addEventListener('input',updateSizeLine);
   $('runBtn').addEventListener('click',run);
   $('dlBtn').addEventListener('click',()=>{
     if(!lastBlob) return;
