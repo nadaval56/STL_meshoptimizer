@@ -1,0 +1,415 @@
+<!DOCTYPE html>
+<html lang="he" dir="rtl">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>STL Decimate — הקטנת פאות בדפדפן</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Rubik:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+<style>
+  :root{
+    --bg:#15171c;
+    --panel:#1c1f27;
+    --panel-2:#22262f;
+    --line:#2d323d;
+    --line-soft:#262b34;
+    --text:#e9eaed;
+    --muted:#8b919e;
+    --muted-2:#646b78;
+    --accent:#ff7a45;          /* heated nozzle — primary actions only */
+    --accent-dim:#c95e34;
+    --mesh:#63d3c7;            /* cool object tint in viewport */
+    --ok:#7fd17a;
+    --r:10px;
+    --mono:"IBM Plex Mono",ui-monospace,monospace;
+    --sans:"Rubik",system-ui,sans-serif;
+  }
+  *{box-sizing:border-box}
+  html,body{height:100%}
+  body{
+    margin:0;background:var(--bg);color:var(--text);font-family:var(--sans);
+    -webkit-font-smoothing:antialiased;overflow:hidden;
+  }
+  /* ---------- top bar ---------- */
+  .bar{
+    height:52px;display:flex;align-items:center;justify-content:space-between;
+    padding:0 18px;border-bottom:1px solid var(--line);background:var(--panel);
+    position:relative;z-index:5;
+  }
+  .wordmark{
+    font-family:var(--mono);font-weight:600;font-size:13px;letter-spacing:.22em;
+    text-transform:uppercase;color:var(--text);display:flex;align-items:center;gap:9px;
+  }
+  .wordmark .dot{width:8px;height:8px;border-radius:2px;background:var(--accent);
+    box-shadow:0 0 10px var(--accent)}
+  .bar-actions{display:flex;gap:8px;align-items:center}
+  .ghost-btn{
+    font-family:var(--sans);font-size:13px;color:var(--muted);background:transparent;
+    border:1px solid var(--line);border-radius:8px;padding:7px 12px;cursor:pointer;
+    transition:border-color .15s,color .15s;
+  }
+  .ghost-btn:hover{color:var(--text);border-color:var(--muted-2)}
+  .ghost-btn.on{color:var(--bg);background:var(--mesh);border-color:var(--mesh);font-weight:500}
+  .ghost-btn:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+
+  /* ---------- layout ---------- */
+  .stage{display:flex;height:calc(100% - 52px)}
+  .viewport{flex:1;position:relative;background:var(--bg);min-width:0}
+  #gl{display:block;width:100%;height:100%}
+  .rail{
+    width:340px;flex-shrink:0;border-inline-start:1px solid var(--line);
+    background:var(--panel);padding:22px 20px;overflow-y:auto;
+  }
+
+  /* ---------- empty / drop state ---------- */
+  .overlay{
+    position:absolute;inset:0;display:flex;flex-direction:column;align-items:center;
+    justify-content:center;gap:14px;pointer-events:none;text-align:center;padding:24px;
+  }
+  .overlay.drag{background:rgba(255,122,69,.06);outline:2px dashed var(--accent);outline-offset:-14px}
+  .overlay .glyph{font-family:var(--mono);font-size:40px;color:var(--line);font-weight:600}
+  .overlay h2{margin:0;font-weight:500;font-size:17px;color:var(--text)}
+  .overlay p{margin:0;font-size:13px;color:var(--muted);max-width:320px;line-height:1.6}
+  .browse{
+    pointer-events:auto;margin-top:4px;font-family:var(--sans);font-size:13px;
+    color:var(--accent);background:transparent;border:1px solid var(--accent-dim);
+    border-radius:8px;padding:8px 16px;cursor:pointer;transition:background .15s}
+  .browse:hover{background:rgba(255,122,69,.1)}
+  .overlay.hidden{display:none}
+
+  .processing{
+    position:absolute;inset:0;display:none;align-items:center;justify-content:center;
+    background:rgba(21,23,28,.7);backdrop-filter:blur(2px);z-index:3;
+    font-family:var(--mono);font-size:13px;color:var(--mesh);letter-spacing:.1em}
+  .processing.show{display:flex}
+  .processing .spin{width:30px;height:30px;border:2px solid var(--line);
+    border-top-color:var(--mesh);border-radius:50%;animation:spin .8s linear infinite;margin-inline-end:12px}
+  @keyframes spin{to{transform:rotate(360deg)}}
+
+  /* ---------- rail content ---------- */
+  .file-chip{
+    display:none;align-items:center;gap:10px;background:var(--panel-2);
+    border:1px solid var(--line);border-radius:var(--r);padding:11px 13px;margin-bottom:20px}
+  .file-chip.show{display:flex}
+  .file-chip .fname{font-size:13px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;flex:1}
+  .file-chip .fmeta{font-family:var(--mono);font-size:11px;color:var(--muted)}
+
+  .eyebrow{font-family:var(--mono);font-size:10px;letter-spacing:.18em;text-transform:uppercase;
+    color:var(--muted-2);margin:0 0 12px}
+  .block{margin-bottom:24px}
+
+  .presets{display:grid;grid-template-columns:1fr 1fr 1fr;gap:7px}
+  .preset{
+    font-family:var(--sans);font-size:12px;color:var(--muted);background:var(--panel-2);
+    border:1px solid var(--line);border-radius:8px;padding:9px 4px;cursor:pointer;
+    text-align:center;transition:all .14s;line-height:1.4}
+  .preset b{display:block;color:var(--text);font-size:12px;font-weight:500}
+  .preset .pct{font-family:var(--mono);font-size:10px;color:var(--muted-2);margin-top:2px}
+  .preset:hover{border-color:var(--muted-2)}
+  .preset.active{border-color:var(--accent);background:rgba(255,122,69,.08)}
+  .preset.active b,.preset.active .pct{color:var(--accent)}
+
+  .slider-row{display:flex;align-items:baseline;justify-content:space-between;margin-bottom:9px}
+  .slider-row label{font-size:13px;color:var(--muted)}
+  .slider-val{font-family:var(--mono);font-size:15px;color:var(--text);font-weight:500}
+  input[type=range]{width:100%;-webkit-appearance:none;appearance:none;height:4px;
+    background:var(--line);border-radius:3px;outline:none}
+  input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;width:16px;height:16px;
+    border-radius:50%;background:var(--accent);cursor:pointer;border:3px solid var(--bg);
+    box-shadow:0 0 0 1px var(--accent-dim)}
+  input[type=range]::-moz-range-thumb{width:16px;height:16px;border-radius:50%;
+    background:var(--accent);cursor:pointer;border:3px solid var(--bg)}
+  input[type=range]:focus-visible{outline:2px solid var(--accent);outline-offset:4px}
+  .target-line{font-family:var(--mono);font-size:11px;color:var(--muted);margin-top:7px}
+  .target-line b{color:var(--mesh)}
+
+  .btn{
+    width:100%;font-family:var(--sans);font-size:14px;font-weight:500;border:none;
+    border-radius:var(--r);padding:13px;cursor:pointer;transition:background .15s,opacity .15s}
+  .btn-primary{background:var(--accent);color:#1a1207}
+  .btn-primary:hover{background:#ff8a5b}
+  .btn-primary:disabled{background:var(--line);color:var(--muted-2);cursor:not-allowed}
+  .btn-download{background:transparent;color:var(--ok);border:1px solid #3a5a37;margin-top:10px}
+  .btn-download:hover{background:rgba(127,209,122,.08)}
+  .btn-download:disabled{opacity:.35;cursor:not-allowed}
+  .btn:focus-visible{outline:2px solid var(--text);outline-offset:2px}
+
+  /* ---------- stats ---------- */
+  .stats{border:1px solid var(--line);border-radius:var(--r);overflow:hidden;display:none}
+  .stats.show{display:block}
+  .stat-row{display:grid;grid-template-columns:auto 1fr auto;align-items:center;gap:10px;
+    padding:12px 14px;border-bottom:1px solid var(--line-soft)}
+  .stat-row:last-child{border-bottom:none}
+  .stat-row .k{font-size:12px;color:var(--muted)}
+  .stat-row .from{font-family:var(--mono);font-size:13px;color:var(--muted-2);text-align:start}
+  .stat-row .to{font-family:var(--mono);font-size:15px;color:var(--text);font-weight:600;text-align:end}
+  .stat-row .arrow{color:var(--muted-2);font-size:12px}
+  .stats .summary{background:var(--panel-2);padding:12px 14px;text-align:center;
+    font-family:var(--mono);font-size:13px}
+  .stats .summary b{color:var(--accent);font-weight:600}
+
+  .hint{font-size:11.5px;color:var(--muted-2);line-height:1.7;margin-top:18px;
+    border-top:1px solid var(--line-soft);padding-top:14px}
+  .hint b{color:var(--muted)}
+
+  /* ---------- mobile ---------- */
+  @media (max-width:780px){
+    body{overflow:auto}
+    .stage{flex-direction:column;height:auto}
+    .viewport{height:52vh;min-height:300px}
+    .rail{width:100%;border-inline-start:none;border-top:1px solid var(--line)}
+  }
+  @media (prefers-reduced-motion:reduce){
+    *{animation-duration:.001ms!important;transition-duration:.001ms!important}
+  }
+</style>
+</head>
+<body>
+  <div class="bar">
+    <div class="wordmark"><span class="dot"></span>STL&nbsp;DECIMATE</div>
+    <div class="bar-actions">
+      <button class="ghost-btn" id="wireBtn">תצוגת רשת</button>
+      <button class="ghost-btn" id="resetBtn">איפוס</button>
+    </div>
+  </div>
+
+  <div class="stage">
+    <div class="viewport" id="viewport">
+      <canvas id="gl"></canvas>
+      <div class="overlay" id="overlay">
+        <div class="glyph">[ ◢ ]</div>
+        <h2>גררו לכאן קובץ STL</h2>
+        <p>הקובץ נשאר אצלכם — כל העיבוד מתבצע בדפדפן, שום דבר לא נשלח לשרת.</p>
+        <button class="browse" id="browseBtn">בחירת קובץ</button>
+        <input type="file" id="fileInput" accept=".stl" hidden>
+      </div>
+      <div class="processing" id="processing"><span class="spin"></span>מעבד…</div>
+    </div>
+
+    <aside class="rail">
+      <div class="file-chip" id="fileChip">
+        <span class="fname" id="chipName">model.stl</span>
+        <span class="fmeta" id="chipMeta">—</span>
+      </div>
+
+      <div class="block">
+        <p class="eyebrow">לפי מטרה</p>
+        <div class="presets">
+          <button class="preset" data-keep="0.75">הדפסה<b>3D</b><span class="pct">75%</span></button>
+          <button class="preset active" data-keep="0.25">תצוגה<b>רינדור</b><span class="pct">25%</span></button>
+          <button class="preset" data-keep="0.07">ווב<b>preview</b><span class="pct">7%</span></button>
+        </div>
+      </div>
+
+      <div class="block">
+        <div class="slider-row">
+          <label for="keep">פאות לשמירה</label>
+          <span class="slider-val" id="keepVal">25%</span>
+        </div>
+        <input type="range" id="keep" min="2" max="100" value="25">
+        <div class="target-line" id="targetLine">טענו קובץ כדי לראות יעד</div>
+      </div>
+
+      <button class="btn btn-primary" id="runBtn" disabled>הקטנת פאות</button>
+      <button class="btn btn-download" id="dlBtn" disabled>הורדת STL מוקטן</button>
+
+      <div class="stats" id="stats">
+        <div class="stat-row">
+          <span class="k">פאות</span>
+          <span class="from" id="fFrom">—</span>
+          <span class="to" id="fTo">—</span>
+        </div>
+        <div class="stat-row">
+          <span class="k">משקל</span>
+          <span class="from" id="sFrom">—</span>
+          <span class="to" id="sTo">—</span>
+        </div>
+        <div class="summary" id="summary">—</div>
+      </div>
+
+      <p class="hint">
+        <b>שני מנופים:</b> דילול פאות (מאבד פרטים) + שמירה כ‑binary STL.
+        הקובץ נשמר תמיד כ‑binary, אז גם ב‑100% תקבלו קובץ קל יותר מ‑ASCII בלי לאבד גיאומטריה.<br><br>
+        <b>להדפסה:</b> אל תגזימו בדילול — פינות חדות מתעגלות. בדקו ב‑slicer לפני שליחה למדפסת.
+      </p>
+    </aside>
+  </div>
+
+  <script type="importmap">
+  {
+    "imports":{
+      "three":"https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js",
+      "three/addons/":"https://cdn.jsdelivr.net/npm/three@0.160.0/examples/jsm/"
+    }
+  }
+  </script>
+
+  <script type="module">
+  import * as THREE from 'three';
+  import { STLLoader } from 'three/addons/loaders/STLLoader.js';
+  import { STLExporter } from 'three/addons/exporters/STLExporter.js';
+  import { SimplifyModifier } from 'three/addons/modifiers/SimplifyModifier.js';
+  import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
+  import { mergeVertices } from 'three/addons/utils/BufferGeometryUtils.js';
+
+  const $ = id => document.getElementById(id);
+  const viewport=$('viewport'), overlay=$('overlay'), processing=$('processing');
+
+  // ---- three setup ----
+  const scene=new THREE.Scene(); scene.background=new THREE.Color(0x15171c);
+  const camera=new THREE.PerspectiveCamera(45,1,0.1,5000);
+  const renderer=new THREE.WebGLRenderer({canvas:$('gl'),antialias:true});
+  renderer.setPixelRatio(Math.min(devicePixelRatio,2));
+  const controls=new OrbitControls(camera,renderer.domElement);
+  controls.enableDamping=true;
+
+  scene.add(new THREE.HemisphereLight(0xcfe6ff,0x202028,1.05));
+  const key=new THREE.DirectionalLight(0xffffff,1.4); key.position.set(4,8,6); scene.add(key);
+
+  // build-plate grid
+  const grid=new THREE.GridHelper(200,20,0x2d323d,0x21252e);
+  grid.material.transparent=true; grid.material.opacity=0.5; scene.add(grid);
+
+  const mat=new THREE.MeshStandardMaterial({color:0x63d3c7,roughness:0.55,metalness:0.05,
+    flatShading:false,wireframe:false});
+  let mesh=null, baseGeo=null, origFaces=0, origSize=0, lastBlob=null, wire=false;
+
+  function resize(){
+    const w=viewport.clientWidth,h=viewport.clientHeight;
+    renderer.setSize(w,h,false); camera.aspect=w/h; camera.updateProjectionMatrix();
+  }
+  new ResizeObserver(resize).observe(viewport); resize();
+
+  (function loop(){requestAnimationFrame(loop);controls.update();renderer.render(scene,camera);})();
+
+  function frame(geo){
+    geo.computeBoundingSphere();
+    const s=geo.boundingSphere, r=s.radius||1;
+    grid.position.set(s.center.x, s.center.y-r, s.center.z);
+    grid.scale.setScalar(Math.max(0.2,r/60));
+    const d=r/Math.sin((camera.fov*Math.PI/180)/2)*1.25;
+    camera.position.set(s.center.x+d*0.6, s.center.y+d*0.5, s.center.z+d*0.8);
+    controls.target.copy(s.center); controls.update();
+  }
+  const faceCount=g=>g.index?g.index.count/3:g.attributes.position.count/3;
+  const human=n=>{const u=['B','KB','MB','GB'];let i=0;while(n>=1024&&i<3){n/=1024;i++;}
+    return (i?n.toFixed(1):n.toFixed(0))+u[i];};
+
+  // ---- load ----
+  function loadBuffer(buf,size,name){
+    let geo;
+    try{ geo=new STLLoader().parse(buf); }
+    catch(e){ alert('לא הצלחתי לקרוא את הקובץ. ודאו שזה STL תקין.'); return; }
+    // weld by position only (STL duplicates verts + per-face normals block merging)
+    geo.deleteAttribute('normal'); geo.deleteAttribute('uv');
+    baseGeo=mergeVertices(geo); baseGeo.computeVertexNormals();
+    origFaces=faceCount(baseGeo); origSize=size;
+
+    if(mesh) scene.remove(mesh);
+    mesh=new THREE.Mesh(baseGeo.clone(),mat); scene.add(mesh); frame(baseGeo);
+
+    overlay.classList.add('hidden');
+    $('fileChip').classList.add('show');
+    $('chipName').textContent=name;
+    $('chipMeta').textContent=origFaces.toLocaleString()+' פאות · '+human(size);
+    $('runBtn').disabled=false; $('dlBtn').disabled=true;
+    $('stats').classList.remove('show'); lastBlob=null;
+    updateTarget();
+  }
+  function readFile(file){
+    if(!file) return;
+    const fr=new FileReader();
+    fr.onload=e=>loadBuffer(e.target.result,file.size,file.name);
+    fr.readAsArrayBuffer(file);
+  }
+
+  // ---- decimate ----
+  function keepRatio(){return +$('keep').value/100;}
+  function updateTarget(){
+    $('keepVal').textContent=$('keep').value+'%';
+    if(!baseGeo){$('targetLine').textContent='טענו קובץ כדי לראות יעד';return;}
+    const t=Math.max(4,Math.floor(origFaces*keepRatio()));
+    $('targetLine').innerHTML='יעד: <b>'+t.toLocaleString()+'</b> פאות (מתוך '+origFaces.toLocaleString()+')';
+  }
+  function run(){
+    if(!baseGeo) return;
+    processing.classList.add('show');
+    setTimeout(()=>{
+      try{
+        const keep=keepRatio();
+        let g=baseGeo.clone();
+        if(keep<1){
+          const verts=g.attributes.position.count;
+          const remove=Math.min(verts-4,Math.floor(verts*(1-keep)));
+          if(remove>0) g=new SimplifyModifier().modify(g,remove);
+        }
+        g.computeVertexNormals();
+        scene.remove(mesh);
+        mesh=new THREE.Mesh(g,mat.clone()); mesh.material.wireframe=wire; scene.add(mesh);
+
+        const result=new STLExporter().parse(mesh,{binary:true});
+        lastBlob=new Blob([result instanceof DataView?result.buffer:result],
+          {type:'application/octet-stream'});
+
+        showStats(faceCount(g),lastBlob.size);
+        $('dlBtn').disabled=false;
+      }catch(e){
+        console.error(e);
+        alert('הדילול נכשל על המודל הזה. נסו יחס פחות אגרסיבי.');
+      }
+      processing.classList.remove('show');
+    },40);
+  }
+  function showStats(nFaces,nSize){
+    $('fFrom').textContent=origFaces.toLocaleString();
+    $('fTo').textContent=nFaces.toLocaleString();
+    $('sFrom').textContent=human(origSize);
+    $('sTo').textContent=human(nSize);
+    const cut=Math.round((1-nSize/origSize)*100);
+    $('summary').innerHTML='הקטנה של <b>'+cut+'%</b> במשקל';
+    $('stats').classList.add('show');
+  }
+
+  // ---- events ----
+  $('keep').addEventListener('input',()=>{
+    updateTarget();
+    document.querySelectorAll('.preset').forEach(p=>p.classList.remove('active'));
+  });
+  document.querySelectorAll('.preset').forEach(p=>p.addEventListener('click',()=>{
+    document.querySelectorAll('.preset').forEach(x=>x.classList.remove('active'));
+    p.classList.add('active');
+    $('keep').value=Math.round(+p.dataset.keep*100); updateTarget();
+  }));
+  $('runBtn').addEventListener('click',run);
+  $('dlBtn').addEventListener('click',()=>{
+    if(!lastBlob) return;
+    const a=document.createElement('a');
+    a.href=URL.createObjectURL(lastBlob);
+    a.download=($('chipName').textContent.replace(/\.stl$/i,''))+'_lite.stl';
+    a.click(); URL.revokeObjectURL(a.href);
+  });
+  $('wireBtn').addEventListener('click',()=>{
+    wire=!wire; $('wireBtn').classList.toggle('on',wire);
+    if(mesh) mesh.material.wireframe=wire;
+  });
+  $('resetBtn').addEventListener('click',()=>location.reload());
+  $('browseBtn').addEventListener('click',()=>$('fileInput').click());
+  $('fileInput').addEventListener('change',e=>readFile(e.target.files[0]));
+
+  // drag & drop
+  ['dragenter','dragover'].forEach(ev=>viewport.addEventListener(ev,e=>{
+    e.preventDefault(); overlay.classList.remove('hidden'); overlay.classList.add('drag');
+  }));
+  ['dragleave','drop'].forEach(ev=>viewport.addEventListener(ev,e=>{
+    e.preventDefault(); overlay.classList.remove('drag');
+    if(ev==='dragleave'&&mesh) overlay.classList.add('hidden');
+  }));
+  viewport.addEventListener('drop',e=>{
+    const f=e.dataTransfer.files[0];
+    if(f&&/\.stl$/i.test(f.name)) readFile(f);
+    else if(mesh) overlay.classList.add('hidden');
+  });
+  </script>
+</body>
+</html>
