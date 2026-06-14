@@ -80,11 +80,16 @@
 
   .processing{
     position:absolute;inset:0;display:none;align-items:center;justify-content:center;
-    background:rgba(21,23,28,.7);backdrop-filter:blur(2px);z-index:3;
-    font-family:var(--mono);font-size:13px;color:var(--mesh);letter-spacing:.1em}
+    background:rgba(21,23,28,.7);backdrop-filter:blur(2px);z-index:3}
   .processing.show{display:flex}
-  .processing .spin{width:30px;height:30px;border:2px solid var(--line);
-    border-top-color:var(--mesh);border-radius:50%;animation:spin .8s linear infinite;margin-inline-end:12px}
+  .proc-box{display:flex;flex-direction:column;align-items:center;gap:13px;width:230px;
+    font-family:var(--mono);font-size:13px;color:var(--mesh);letter-spacing:.06em}
+  .proc-head{display:flex;align-items:center;gap:10px}
+  .proc-bar{width:100%;height:4px;background:var(--line);border-radius:3px;overflow:hidden}
+  .proc-fill{height:100%;width:0;background:var(--mesh);border-radius:3px;transition:width .25s ease}
+  .proc-pct{font-size:12px;color:var(--muted)}
+  .spin{width:24px;height:24px;border:2px solid var(--line);
+    border-top-color:var(--mesh);border-radius:50%;animation:spin .8s linear infinite}
   @keyframes spin{to{transform:rotate(360deg)}}
 
   /* ---------- rail content ---------- */
@@ -123,6 +128,11 @@
   input[type=range]:focus-visible{outline:2px solid var(--accent);outline-offset:4px}
   .target-line{font-family:var(--mono);font-size:11px;color:var(--muted);margin-top:7px}
   .target-line b{color:var(--mesh)}
+
+  .check-row{display:flex;align-items:flex-start;gap:9px;margin-top:14px;cursor:pointer;
+    font-size:12px;color:var(--muted);line-height:1.5}
+  .check-row input{accent-color:var(--accent);width:15px;height:15px;margin:1px 0 0;cursor:pointer;flex-shrink:0}
+  .check-row:hover{color:var(--text)}
 
   .btn{
     width:100%;font-family:var(--sans);font-size:14px;font-weight:500;border:none;
@@ -184,7 +194,13 @@
         <button class="browse" id="browseBtn">בחירת קובץ</button>
         <input type="file" id="fileInput" accept=".stl" hidden>
       </div>
-      <div class="processing" id="processing"><span class="spin"></span>מעבד…</div>
+      <div class="processing" id="processing">
+        <div class="proc-box">
+          <div class="proc-head"><span class="spin"></span><span id="procLabel">מעבד…</span></div>
+          <div class="proc-bar"><div class="proc-fill" id="procFill"></div></div>
+          <div class="proc-pct" id="procPct">0%</div>
+        </div>
+      </div>
     </div>
 
     <aside class="rail">
@@ -209,6 +225,10 @@
         </div>
         <input type="range" id="keep" min="2" max="100" value="25">
         <div class="target-line" id="targetLine">טענו קובץ כדי לראות יעד</div>
+        <label class="check-row" for="lockBorder">
+          <input type="checkbox" id="lockBorder" checked>
+          <span>נעילת גבולות — שומר על הקצוות ומונע חורים. מומלץ להדפסה ולקובץ "חוקי" יותר.</span>
+        </label>
       </div>
 
       <button class="btn btn-primary" id="runBtn" disabled>הקטנת פאות</button>
@@ -231,8 +251,8 @@
       <p class="hint">
         <b>מנוע meshoptimizer:</b> הדילול רץ ב‑Web Worker (לא מקפיא את הטאב) ומהיר בהרבה
         מהמנוע הקודם, גם על מודלים של מאות אלפי פאות.<br><br>
-        <b>שני מנופים:</b> דילול פאות (מאבד פרטים) + שמירה כ‑binary STL.
-        הקובץ נשמר תמיד כ‑binary, אז גם ב‑100% תקבלו קובץ קל יותר מ‑ASCII בלי לאבד גיאומטריה.<br><br>
+        <b>קובץ "חוקי" יותר:</b> משולשים מנוונים (שטח אפס) מסוננים אוטומטית, ו"נעילת גבולות"
+        מונעת חורים חדשים בקצוות. חורים שכבר קיימים בקובץ המקורי עדיין דורשים "תיקון" ב‑slicer/3D&nbsp;Builder.<br><br>
         <b>להדפסה:</b> אל תגזימו בדילול — פינות חדות מתעגלות. בדקו ב‑slicer לפני שליחה למדפסת.
       </p>
     </aside>
@@ -303,14 +323,55 @@
   const MESHOPT_URL='https://cdn.jsdelivr.net/npm/meshoptimizer@0.22.0/meshopt_simplifier.module.js';
   const workerSrc=`
     import { MeshoptSimplifier } from '${MESHOPT_URL}';
+
+    // Drop triangles that are invalid for export: repeated indices or ~zero area.
+    // These are what tools like 3D Builder flag as a non-manifold / "invalid" mesh.
+    function cleanDegenerate(idx, pos){
+      let minx=Infinity,miny=Infinity,minz=Infinity,maxx=-Infinity,maxy=-Infinity,maxz=-Infinity;
+      for(let i=0;i<pos.length;i+=3){
+        const x=pos[i],y=pos[i+1],z=pos[i+2];
+        if(x<minx)minx=x; if(x>maxx)maxx=x;
+        if(y<miny)miny=y; if(y>maxy)maxy=y;
+        if(z<minz)minz=z; if(z>maxz)maxz=z;
+      }
+      const dx=maxx-minx,dy=maxy-miny,dz=maxz-minz;
+      const diag=Math.sqrt(dx*dx+dy*dy+dz*dz)||1;
+      const eps=diag*diag*1e-12; // on squared cross-product length (~ (2*area)^2)
+      const out=new Uint32Array(idx.length);
+      let k=0;
+      for(let i=0;i<idx.length;i+=3){
+        const a=idx[i],b=idx[i+1],c=idx[i+2];
+        if(a===b||b===c||a===c) continue;
+        const ux=pos[b*3]-pos[a*3], uy=pos[b*3+1]-pos[a*3+1], uz=pos[b*3+2]-pos[a*3+2];
+        const vx=pos[c*3]-pos[a*3], vy=pos[c*3+1]-pos[a*3+1], vz=pos[c*3+2]-pos[a*3+2];
+        const nx=uy*vz-uz*vy, ny=uz*vx-ux*vz, nz=ux*vy-uy*vx;
+        if(nx*nx+ny*ny+nz*nz<=eps) continue;
+        out[k++]=a; out[k++]=b; out[k++]=c;
+      }
+      return out.slice(0,k);
+    }
+
     self.onmessage = async (e) => {
-      const { id, indices, positions, targetCount, targetError, lockBorder } = e.data;
+      const d=e.data, id=d.id, positions=d.positions, targetError=d.targetError;
+      const flags = d.lockBorder ? ['LockBorder'] : [];
       try {
         await MeshoptSimplifier.ready;
-        const flags = lockBorder ? ['LockBorder'] : [];
-        const [dst, error] = MeshoptSimplifier.simplify(
-          indices, positions, 3, targetCount * 3, targetError, flags);
-        self.postMessage({ id, ok:true, indices:dst, error }, [dst.buffer]);
+        let idx=d.indices;
+        const count=idx.length/3, target=Math.max(4,d.targetCount);
+        let err=0;
+        if(count>target){
+          // progressive multi-pass: lets us report real progress and stay responsive
+          const ratio=target/count;
+          const passes=Math.min(6, Math.max(1, Math.round(-Math.log(ratio)/Math.log(2))));
+          for(let p=1;p<=passes;p++){
+            const t = (p===passes) ? target : Math.round(count*Math.pow(ratio,p/passes));
+            const r = MeshoptSimplifier.simplify(idx, positions, 3, Math.max(4,t)*3, targetError, flags);
+            idx=r[0]; err=r[1];
+            self.postMessage({ id, progress:p/passes });
+          }
+        }
+        idx=cleanDegenerate(idx, positions);
+        self.postMessage({ id, ok:true, indices:idx, error:err }, [idx.buffer]);
       } catch (err) {
         self.postMessage({ id, ok:false, message: String((err && err.message) || err) });
       }
@@ -324,13 +385,14 @@
     }
     return simWorker;
   }
-  function simplifyInWorker(index, positions, targetFaces, targetError, lockBorder){
+  function simplifyInWorker(index, positions, targetFaces, targetError, lockBorder, onProgress){
     return new Promise((resolve,reject)=>{
       const w=getWorker(), id=++jobId;
       const onMsg=e=>{
-        if(e.data.id!==id) return;
+        const d=e.data; if(d.id!==id) return;
+        if(d.progress!==undefined){ onProgress && onProgress(d.progress); return; }
         w.removeEventListener('message',onMsg);
-        e.data.ok ? resolve(e.data) : reject(new Error(e.data.message));
+        d.ok ? resolve(d) : reject(new Error(d.message));
       };
       w.addEventListener('message',onMsg);
       // copy buffers so the main-thread geometry keeps its own data after transfer
@@ -378,24 +440,30 @@
     const t=Math.max(4,Math.floor(origFaces*keepRatio()));
     $('targetLine').innerHTML='יעד: <b>'+t.toLocaleString()+'</b> פאות (מתוך '+origFaces.toLocaleString()+')';
   }
+  function setProgress(pct,label){
+    $('procFill').style.width=pct+'%';
+    $('procPct').textContent=pct+'%';
+    if(label) $('procLabel').textContent=label;
+  }
   async function run(){
     if(!baseGeo) return;
     $('runBtn').disabled=true;
+    setProgress(0,'מעבד…');
     processing.classList.add('show');
     try{
       const keep=keepRatio();
-      let g;
-      if(keep<1){
-        const targetFaces=Math.max(4,Math.floor(origFaces*keep));
-        // targetError=1 lets meshopt reach the requested face count (slider drives it)
-        const res=await simplifyInWorker(
-          baseGeo.index.array, baseGeo.attributes.position.array, targetFaces, 1, false);
-        g=new THREE.BufferGeometry();
-        g.setAttribute('position', baseGeo.attributes.position.clone());
-        g.setIndex(new THREE.BufferAttribute(res.indices,1));
-      }else{
-        g=baseGeo.clone();
-      }
+      // targetError=1 lets meshopt reach the requested face count (slider drives it).
+      // Everything goes through the worker so the degenerate-triangle cleanup always runs.
+      const targetFaces=keep<1?Math.max(4,Math.floor(origFaces*keep)):origFaces;
+      const lockBorder=$('lockBorder').checked;
+      const res=await simplifyInWorker(
+        baseGeo.index.array, baseGeo.attributes.position.array, targetFaces, 1, lockBorder,
+        p=>setProgress(Math.round(p*88),'מדלל פאות…'));
+
+      setProgress(92,'מייצא STL…');
+      const g=new THREE.BufferGeometry();
+      g.setAttribute('position', baseGeo.attributes.position.clone());
+      g.setIndex(new THREE.BufferAttribute(res.indices,1));
       g.computeVertexNormals();
       scene.remove(mesh);
       mesh=new THREE.Mesh(g,mat.clone()); mesh.material.wireframe=wire; scene.add(mesh);
@@ -404,6 +472,7 @@
       lastBlob=new Blob([result instanceof DataView?result.buffer:result],
         {type:'application/octet-stream'});
 
+      setProgress(100,'הושלם');
       showStats(faceCount(g),lastBlob.size);
       $('dlBtn').disabled=false;
     }catch(e){
