@@ -229,6 +229,8 @@
       </div>
 
       <p class="hint">
+        <b>מנוע meshoptimizer:</b> הדילול רץ ב‑Web Worker (לא מקפיא את הטאב) ומהיר בהרבה
+        מהמנוע הקודם, גם על מודלים של מאות אלפי פאות.<br><br>
         <b>שני מנופים:</b> דילול פאות (מאבד פרטים) + שמירה כ‑binary STL.
         הקובץ נשמר תמיד כ‑binary, אז גם ב‑100% תקבלו קובץ קל יותר מ‑ASCII בלי לאבד גיאומטריה.<br><br>
         <b>להדפסה:</b> אל תגזימו בדילול — פינות חדות מתעגלות. בדקו ב‑slicer לפני שליחה למדפסת.
@@ -249,7 +251,6 @@
   import * as THREE from 'three';
   import { STLLoader } from 'three/addons/loaders/STLLoader.js';
   import { STLExporter } from 'three/addons/exporters/STLExporter.js';
-  import { SimplifyModifier } from 'three/addons/modifiers/SimplifyModifier.js';
   import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
   import { mergeVertices } from 'three/addons/utils/BufferGeometryUtils.js';
 
@@ -296,6 +297,50 @@
   const human=n=>{const u=['B','KB','MB','GB'];let i=0;while(n>=1024&&i<3){n/=1024;i++;}
     return (i?n.toFixed(1):n.toFixed(0))+u[i];};
 
+  // ---- meshoptimizer simplifier, running inside a Web Worker ----
+  // meshopt's WASM simplifier is far faster + higher quality than SimplifyModifier,
+  // and running it off-thread keeps the UI responsive on heavy models.
+  const MESHOPT_URL='https://cdn.jsdelivr.net/npm/meshoptimizer@0.22.0/meshopt_simplifier.module.js';
+  const workerSrc=`
+    import { MeshoptSimplifier } from '${MESHOPT_URL}';
+    self.onmessage = async (e) => {
+      const { id, indices, positions, targetCount, targetError, lockBorder } = e.data;
+      try {
+        await MeshoptSimplifier.ready;
+        const flags = lockBorder ? ['LockBorder'] : [];
+        const [dst, error] = MeshoptSimplifier.simplify(
+          indices, positions, 3, targetCount * 3, targetError, flags);
+        self.postMessage({ id, ok:true, indices:dst, error }, [dst.buffer]);
+      } catch (err) {
+        self.postMessage({ id, ok:false, message: String((err && err.message) || err) });
+      }
+    };
+  `;
+  let simWorker=null, jobId=0;
+  function getWorker(){
+    if(!simWorker){
+      const blob=new Blob([workerSrc],{type:'application/javascript'});
+      simWorker=new Worker(URL.createObjectURL(blob),{type:'module'});
+    }
+    return simWorker;
+  }
+  function simplifyInWorker(index, positions, targetFaces, targetError, lockBorder){
+    return new Promise((resolve,reject)=>{
+      const w=getWorker(), id=++jobId;
+      const onMsg=e=>{
+        if(e.data.id!==id) return;
+        w.removeEventListener('message',onMsg);
+        e.data.ok ? resolve(e.data) : reject(new Error(e.data.message));
+      };
+      w.addEventListener('message',onMsg);
+      // copy buffers so the main-thread geometry keeps its own data after transfer
+      const idx=index instanceof Uint32Array?index.slice():Uint32Array.from(index);
+      const pos=positions instanceof Float32Array?positions.slice():Float32Array.from(positions);
+      w.postMessage({id,indices:idx,positions:pos,targetCount:targetFaces,targetError,lockBorder},
+        [idx.buffer,pos.buffer]);
+    });
+  }
+
   // ---- load ----
   function loadBuffer(buf,size,name){
     let geo;
@@ -316,6 +361,7 @@
     $('runBtn').disabled=false; $('dlBtn').disabled=true;
     $('stats').classList.remove('show'); lastBlob=null;
     updateTarget();
+    getWorker(); // start loading the meshopt WASM in the background while the user picks a ratio
   }
   function readFile(file){
     if(!file) return;
@@ -332,34 +378,41 @@
     const t=Math.max(4,Math.floor(origFaces*keepRatio()));
     $('targetLine').innerHTML='יעד: <b>'+t.toLocaleString()+'</b> פאות (מתוך '+origFaces.toLocaleString()+')';
   }
-  function run(){
+  async function run(){
     if(!baseGeo) return;
+    $('runBtn').disabled=true;
     processing.classList.add('show');
-    setTimeout(()=>{
-      try{
-        const keep=keepRatio();
-        let g=baseGeo.clone();
-        if(keep<1){
-          const verts=g.attributes.position.count;
-          const remove=Math.min(verts-4,Math.floor(verts*(1-keep)));
-          if(remove>0) g=new SimplifyModifier().modify(g,remove);
-        }
-        g.computeVertexNormals();
-        scene.remove(mesh);
-        mesh=new THREE.Mesh(g,mat.clone()); mesh.material.wireframe=wire; scene.add(mesh);
-
-        const result=new STLExporter().parse(mesh,{binary:true});
-        lastBlob=new Blob([result instanceof DataView?result.buffer:result],
-          {type:'application/octet-stream'});
-
-        showStats(faceCount(g),lastBlob.size);
-        $('dlBtn').disabled=false;
-      }catch(e){
-        console.error(e);
-        alert('הדילול נכשל על המודל הזה. נסו יחס פחות אגרסיבי.');
+    try{
+      const keep=keepRatio();
+      let g;
+      if(keep<1){
+        const targetFaces=Math.max(4,Math.floor(origFaces*keep));
+        // targetError=1 lets meshopt reach the requested face count (slider drives it)
+        const res=await simplifyInWorker(
+          baseGeo.index.array, baseGeo.attributes.position.array, targetFaces, 1, false);
+        g=new THREE.BufferGeometry();
+        g.setAttribute('position', baseGeo.attributes.position.clone());
+        g.setIndex(new THREE.BufferAttribute(res.indices,1));
+      }else{
+        g=baseGeo.clone();
       }
+      g.computeVertexNormals();
+      scene.remove(mesh);
+      mesh=new THREE.Mesh(g,mat.clone()); mesh.material.wireframe=wire; scene.add(mesh);
+
+      const result=new STLExporter().parse(mesh,{binary:true});
+      lastBlob=new Blob([result instanceof DataView?result.buffer:result],
+        {type:'application/octet-stream'});
+
+      showStats(faceCount(g),lastBlob.size);
+      $('dlBtn').disabled=false;
+    }catch(e){
+      console.error(e);
+      alert('הדילול נכשל. נסו יחס פחות אגרסיבי, או בדקו חיבור אינטרנט — מנוע ה‑meshoptimizer נטען מ‑CDN.');
+    }finally{
       processing.classList.remove('show');
-    },40);
+      $('runBtn').disabled=false;
+    }
   }
   function showStats(nFaces,nSize){
     $('fFrom').textContent=origFaces.toLocaleString();
