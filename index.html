@@ -43,6 +43,7 @@
   }
   .wordmark .dot{width:8px;height:8px;border-radius:2px;background:var(--accent);
     box-shadow:0 0 10px var(--accent)}
+  .wordmark .ver{font-size:9px;letter-spacing:.1em;color:var(--muted-2);margin-inline-start:10px}
   .bar-actions{display:flex;gap:8px;align-items:center}
   .ghost-btn{
     font-family:var(--sans);font-size:13px;color:var(--muted);background:transparent;
@@ -196,8 +197,9 @@
 </head>
 <body>
   <div class="bar">
-    <div class="wordmark"><span class="dot"></span>STL&nbsp;DECIMATE</div>
+    <div class="wordmark"><span class="dot"></span>STL&nbsp;DECIMATE<span class="ver" id="verTag"></span></div>
     <div class="bar-actions">
+      <button class="ghost-btn" id="rotBtn">סובב 90°</button>
       <button class="ghost-btn" id="wireBtn">תצוגת רשת</button>
       <button class="ghost-btn" id="resetBtn">איפוס</button>
     </div>
@@ -363,6 +365,9 @@
     flatShading:false,wireframe:false});
   let mesh=null, baseGeo=null, origFaces=0, origSize=0, lastBlob=null, wire=false;
   let origDims=new THREE.Vector3(1,1,1), origLongest=1, displayQuat=new THREE.Quaternion();
+  let userRot=new THREE.Quaternion(), lastShownGeo=null;
+  const VERSION='2026-06-15·v7';
+  $('verTag').textContent=VERSION;
 
   function resize(){
     const w=viewport.clientWidth,h=viewport.clientHeight;
@@ -629,8 +634,10 @@
   // Build the preview mesh from a geometry given in export coordinates: clone it,
   // rotate to stand upright, and drop it onto the grid. Export geometry is untouched.
   function showMeshGeo(geo, doFrame){
+    lastShownGeo=geo;
     const dg=geo.clone();
     dg.applyQuaternion(displayQuat);
+    dg.applyQuaternion(userRot);          // manual 'סובב' adjustments on top of auto-orient
     dg.computeBoundingBox();
     const bb=dg.boundingBox;
     dg.translate(-(bb.min.x+bb.max.x)/2, -bb.min.y, -(bb.min.z+bb.max.z)/2);
@@ -789,6 +796,10 @@
   $('wireBtn').addEventListener('click',()=>{
     wire=!wire; $('wireBtn').classList.toggle('on',wire);
     if(mesh) mesh.material.wireframe=wire;
+  });
+  $('rotBtn').addEventListener('click',()=>{
+    userRot.premultiply(new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(1,0,0), Math.PI/2));
+    if(lastShownGeo) showMeshGeo(lastShownGeo, true);
   });
   $('resetBtn').addEventListener('click',()=>location.reload());
   $('browseBtn').addEventListener('click',()=>$('fileInput').click());
