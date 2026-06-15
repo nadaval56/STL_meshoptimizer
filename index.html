@@ -449,8 +449,28 @@
     // with a centroid fan. New centroid vertices are appended to a copy of positions.
     function repairMesh(idx, pos){
       const baseN=pos.length/3;
-      let faces=[];
-      for(let i=0;i<idx.length;i+=3) faces.push([idx[i],idx[i+1],idx[i+2]]);
+      // Weld coincident vertices in position space so our topology matches a re-welded
+      // STL import — the exporter writes a triangle soup that the slicer re-welds, so
+      // index-only adjacency under-counts the real non-manifold edges.
+      let mnx=Infinity,mny=Infinity,mnz=Infinity,mxx=-Infinity,mxy=-Infinity,mxz=-Infinity;
+      for(let i=0;i<pos.length;i+=3){ const x=pos[i],y=pos[i+1],z=pos[i+2];
+        if(x<mnx)mnx=x; if(x>mxx)mxx=x; if(y<mny)mny=y; if(y>mxy)mxy=y; if(z<mnz)mnz=z; if(z>mxz)mxz=z; }
+      const q=(Math.hypot(mxx-mnx,mxy-mny,mxz-mnz)||1)*1e-5;
+      const canon=new Map(), remap=new Int32Array(baseN);
+      for(let v=0;v<baseN;v++){
+        const key=Math.round(pos[v*3]/q)+'_'+Math.round(pos[v*3+1]/q)+'_'+Math.round(pos[v*3+2]/q);
+        let c=canon.get(key); if(c===undefined){ c=v; canon.set(key,c); } remap[v]=c;
+      }
+      // remapped faces, dropping welding-created degenerates and exact duplicate faces
+      let faces=[]; const seenF=new Set();
+      for(let i=0;i<idx.length;i+=3){
+        const a=remap[idx[i]], b=remap[idx[i+1]], c=remap[idx[i+2]];
+        if(a===b||b===c||a===c) continue;
+        let s0=a,s1=b,s2=c,x;
+        if(s0>s1){x=s0;s0=s1;s1=x;} if(s1>s2){x=s1;s1=s2;s2=x;} if(s0>s1){x=s0;s0=s1;s1=x;}
+        const fk=s0+'_'+s1+'_'+s2; if(seenF.has(fk)) continue; seenF.add(fk);
+        faces.push([a,b,c]);
+      }
       const extra=[];
       const gx=i=> i<baseN ? pos[i*3]   : extra[(i-baseN)*3];
       const gy=i=> i<baseN ? pos[i*3+1] : extra[(i-baseN)*3+1];
@@ -583,24 +603,25 @@
     });
   }
 
-  // Pick the model's "up": the longest bounding-box axis, oriented so the end with
-  // the larger flat face (the base) sits at the bottom. Used to stand the model up
-  // in the viewer (display only — the exported STL keeps its original coordinates).
+  // Pick the model's "up": the longest bounding-box axis, oriented so the FLATTEST
+  // end (the base — e.g. shoe soles, far flatter than a head) sits at the bottom.
+  // Display only — the exported STL keeps its original coordinates.
   function computeStandingUp(pos){
     let mn=[Infinity,Infinity,Infinity], mx=[-Infinity,-Infinity,-Infinity];
     for(let i=0;i<pos.length;i+=3) for(let a=0;a<3;a++){ const v=pos[i+a]; if(v<mn[a])mn[a]=v; if(v>mx[a])mx[a]=v; }
     const ext=[mx[0]-mn[0],mx[1]-mn[1],mx[2]-mn[2]];
     let ax=0; if(ext[1]>ext[ax])ax=1; if(ext[2]>ext[ax])ax=2;
-    const span=ext[ax]||1, loT=mn[ax]+span*0.15, hiT=mx[ax]-span*0.15;
+    const span=ext[ax]||1, band=span*0.04;            // thin slab right at each extreme
+    const loEdge=mn[ax]+band, hiEdge=mx[ax]-band;
     let bottomFlat=0, topFlat=0;
     for(let i=0;i<pos.length;i+=9){
       const ux=pos[i+3]-pos[i], uy=pos[i+4]-pos[i+1], uz=pos[i+5]-pos[i+2];
       const vx=pos[i+6]-pos[i], vy=pos[i+7]-pos[i+1], vz=pos[i+8]-pos[i+2];
       const nx=uy*vz-uz*vy, ny=uz*vx-ux*vz, nz=ux*vy-uy*vx;
       const len=Math.hypot(nx,ny,nz)||1, na=(ax===0?nx:ax===1?ny:nz)/len;
-      if(Math.abs(na)<0.85) continue;                 // only faces parallel to the base plane
+      if(Math.abs(na)<0.5) continue;                  // only faces roughly parallel to the base plane
       const cen=(pos[i+ax]+pos[i+3+ax]+pos[i+6+ax])/3;
-      if(cen<=loT) bottomFlat+=len; else if(cen>=hiT) topFlat+=len;
+      if(cen<=loEdge) bottomFlat+=len; else if(cen>=hiEdge) topFlat+=len;
     }
     const up=[0,0,0]; up[ax]= (bottomFlat>=topFlat) ? 1 : -1;  // up points from base toward body
     return up;
