@@ -162,10 +162,25 @@
   .stats .summary{background:var(--panel-2);padding:12px 14px;text-align:center;
     font-family:var(--mono);font-size:13px}
   .stats .summary b{color:var(--accent);font-weight:600}
+  .stat-row .to.ok{color:var(--ok)}
+  .stat-row .to.warn{color:var(--accent)}
 
-  .hint{font-size:11.5px;color:var(--muted-2);line-height:1.7;margin-top:18px;
-    border-top:1px solid var(--line-soft);padding-top:14px}
-  .hint b{color:var(--muted)}
+  /* ---------- collapsibles (accordion) ---------- */
+  details.acc{border-top:1px solid var(--line-soft);margin-top:0}
+  details.acc>summary{list-style:none;cursor:pointer;padding:11px 2px;display:flex;
+    align-items:center;justify-content:space-between;font-size:12.5px;color:var(--muted);
+    user-select:none}
+  details.acc>summary::-webkit-details-marker{display:none}
+  details.acc>summary:hover{color:var(--text)}
+  details.acc>summary .chev{font-family:var(--mono);font-size:11px;color:var(--muted-2);
+    transition:transform .18s}
+  details.acc[open]>summary .chev{transform:rotate(90deg)}
+  details.acc .acc-body{padding:2px 2px 14px;font-size:11.5px;color:var(--muted-2);line-height:1.7}
+  details.acc .acc-body b{color:var(--muted)}
+  details.acc .check-row:first-child{margin-top:4px}
+
+  .warn-row{font-size:11px;color:var(--accent-dim);line-height:1.5;margin:8px 0 2px;
+    padding-inline-start:24px}
 
   /* ---------- mobile ---------- */
   @media (max-width:780px){
@@ -214,7 +229,7 @@
       </div>
 
       <div class="block">
-        <p class="eyebrow">לפי מטרה</p>
+        <p class="eyebrow">קביעה מהירה</p>
         <div class="presets">
           <button class="preset" data-keep="0.75">הדפסה<b>3D</b><span class="pct">75%</span></button>
           <button class="preset active" data-keep="0.25">תצוגה<b>רינדור</b><span class="pct">25%</span></button>
@@ -224,24 +239,16 @@
 
       <div class="block">
         <div class="slider-row">
-          <label for="keep">פאות לשמירה</label>
-          <span class="slider-val" id="keepVal">25%</span>
+          <label for="keep">גודל קובץ ליצוא</label>
+          <span class="slider-val" id="keepVal">—</span>
         </div>
         <input type="range" id="keep" min="2" max="100" value="25">
         <div class="target-line" id="targetLine">טענו קובץ כדי לראות יעד</div>
-        <label class="check-row" for="lockBorder">
-          <input type="checkbox" id="lockBorder" checked>
-          <span>נעילת גבולות — שומר על הקצוות ומונע חורים. מומלץ להדפסה ולקובץ "חוקי" יותר.</span>
-        </label>
-        <label class="check-row" for="repair">
-          <input type="checkbox" id="repair" checked>
-          <span>תיקון רשת בטוח — מאחה סדקים ומסיר פאות כפולות/מנוונות (מפחית non-manifold).</span>
-        </label>
       </div>
 
       <div class="block" id="sizeBlock" hidden>
         <div class="slider-row">
-          <label for="sizeInput">גודל לייצוא — צד ארוך</label>
+          <label for="sizeInput">גודל הדפסה — צד ארוך</label>
           <span class="slider-val"><input type="number" id="sizeInput" min="0.1" step="0.1"><span class="unit">מ"מ</span></span>
         </div>
         <div class="target-line" id="sizeLine">—</div>
@@ -261,18 +268,58 @@
           <span class="from" id="sFrom">—</span>
           <span class="to" id="sTo">—</span>
         </div>
+        <div class="stat-row">
+          <span class="k">תקינות</span>
+          <span class="from"></span>
+          <span class="to" id="vTo">—</span>
+        </div>
         <div class="summary" id="summary">—</div>
       </div>
 
-      <p class="hint">
-        <b>מנוע meshoptimizer:</b> הדילול רץ ב‑Web Worker (לא מקפיא את הטאב) ומהיר בהרבה
-        מהמנוע הקודם, גם על מודלים של מאות אלפי פאות.<br><br>
-        <b>תיקון בטוח:</b> מאחה סדקים זעירים ומסיר פאות כפולות/מנוונות — מפחית אזהרות
-        non-manifold. <b>הערה:</b> חיתוכי‑חלקים וחורים גדולים שכבר קיימים במקור עדיין דורשים
-        "Repair" בסלייסר/3D&nbsp;Builder (בטוח לשימוש), או remesh מלא.<br><br>
-        <b>גודל לייצוא:</b> הזינו את אורך הצד הארוך במ"מ — הקובץ יוקטן/יוגדל בקנה‑מידה אחיד.<br><br>
-        <b>להדפסה:</b> אל תגזימו בדילול — פינות חדות מתעגלות. בדקו ב‑slicer לפני שליחה למדפסת.
-      </p>
+      <details class="acc">
+        <summary><span>אפשרויות מתקדמות</span><span class="chev">▸</span></summary>
+        <div class="acc-body">
+          <label class="check-row" for="lockBorder">
+            <input type="checkbox" id="lockBorder" checked>
+            <span>נעילת גבולות — שומר על הקצוות ומונע חורים בזמן הדילול.</span>
+          </label>
+          <label class="check-row" for="repair">
+            <input type="checkbox" id="repair" checked>
+            <span>תיקון בטוח — מאחה סדקים ומסיר פאות כפולות/מנוונות.</span>
+          </label>
+          <label class="check-row" for="aggressive">
+            <input type="checkbox" id="aggressive">
+            <span>תיקון אגרסיבי — ממלא חורים ומסיר פאות עודפות (watertight).</span>
+          </label>
+          <div class="warn-row">⚠ אגרסיבי איטי יותר וממלא חורים בטלאי שטוח — בדקו את התוצאה לפני הדפסה.</div>
+        </div>
+      </details>
+
+      <details class="acc">
+        <summary><span>איך זה עובד?</span><span class="chev">▸</span></summary>
+        <div class="acc-body">
+          המנוע <b>meshoptimizer</b> רץ ב‑Web Worker (לא מקפיא את הטאב) ומדלל פאות מהר ובאיכות
+          גבוהה. הקובץ נשמר כ‑binary STL, ושורת "גודל קובץ" מראה תחזית לפי מספר הפאות.
+        </div>
+      </details>
+
+      <details class="acc">
+        <summary><span>קובץ "חוקי" / תיקון</span><span class="chev">▸</span></summary>
+        <div class="acc-body">
+          <b>תקינות</b> בסטטיסטיקה סופרת קצוות לא‑חוקיים (non-manifold) בפלט. <b>תיקון בטוח</b>
+          מאחה סדקים ומסיר פאות כפולות. <b>תיקון אגרסיבי</b> ממלא חורים ומסיר פאות עודפות.<br>
+          חיתוכי‑חלקים מורכבים עדיין עשויים לדרוש את כפתור ה‑Repair של הסלייסר/3D&nbsp;Builder
+          (מבוסס Netfabb — בטוח לשימוש).
+        </div>
+      </details>
+
+      <details class="acc">
+        <summary><span>טיפים להדפסה</span><span class="chev">▸</span></summary>
+        <div class="acc-body">
+          אל תגזימו בדילול — פינות חדות מתעגלות. הגדירו את הגודל הסופי במ"מ, ובדקו ב‑slicer
+          לפני שליחה למדפסת.
+        </div>
+      </details>
     </aside>
   </div>
 
@@ -380,6 +427,89 @@
       return out.slice(0,k);
     }
 
+    // Count edges not shared by exactly two faces — the slicer's "non-manifold edges".
+    function countNonManifold(idx){
+      const m=new Map();
+      for(let i=0;i<idx.length;i+=3){
+        const t=[idx[i],idx[i+1],idx[i+2]];
+        for(let e=0;e<3;e++){
+          const u=t[e], v=t[(e+1)%3];
+          const k=u<v?u+'_'+v:v+'_'+u;
+          m.set(k,(m.get(k)||0)+1);
+        }
+      }
+      let bad=0; for(const c of m.values()) if(c!==2) bad++;
+      return bad;
+    }
+
+    // Aggressive repair (admesh-style, same idea slicers use): remove faces on edges
+    // shared by >2 faces, then fill remaining holes by triangulating each boundary loop
+    // with a centroid fan. New centroid vertices are appended to a copy of positions.
+    function repairMesh(idx, pos){
+      const baseN=pos.length/3;
+      let faces=[];
+      for(let i=0;i<idx.length;i+=3) faces.push([idx[i],idx[i+1],idx[i+2]]);
+      const extra=[];
+      const gx=i=> i<baseN ? pos[i*3]   : extra[(i-baseN)*3];
+      const gy=i=> i<baseN ? pos[i*3+1] : extra[(i-baseN)*3+1];
+      const gz=i=> i<baseN ? pos[i*3+2] : extra[(i-baseN)*3+2];
+      const ekey=(u,v)=> u<v ? u+'_'+v : v+'_'+u;
+
+      for(let iter=0; iter<6; iter++){
+        const em=new Map();
+        for(let f=0;f<faces.length;f++){
+          const t=faces[f];
+          for(let e=0;e<3;e++){ const k=ekey(t[e],t[(e+1)%3]); let a=em.get(k); if(!a){a=[];em.set(k,a);} a.push(f); }
+        }
+        const removed=new Set();
+        for(const arr of em.values()){
+          if(arr.length>2){ let kept=0; for(const f of arr){ if(removed.has(f))continue; kept++; if(kept>2) removed.add(f); } }
+        }
+        if(removed.size) faces=faces.filter((t,f)=>!removed.has(f));
+
+        const cnt=new Map();
+        for(let f=0;f<faces.length;f++){ const t=faces[f]; for(let e=0;e<3;e++){ const k=ekey(t[e],t[(e+1)%3]); cnt.set(k,(cnt.get(k)||0)+1); } }
+        const next=new Map(); let nb=0;
+        for(let f=0;f<faces.length;f++){
+          const t=faces[f];
+          for(let e=0;e<3;e++){ const u=t[e], v=t[(e+1)%3];
+            if(cnt.get(ekey(u,v))===1){ let a=next.get(u); if(!a){a=[];next.set(u,a);} a.push(v); nb++; } }
+        }
+        if(nb===0) break;
+
+        const used=new Set();
+        for(const [su,arr0] of next){
+          for(const sv of arr0){
+            const sk=su+'>'+sv; if(used.has(sk)) continue;
+            const loop=[su]; let cur=sv, steps=0; used.add(sk);
+            while(cur!==su && steps<200000){
+              loop.push(cur);
+              const outs=next.get(cur); if(!outs||!outs.length) break;
+              let nx=-1;
+              for(const cand of outs){ const kk=cur+'>'+cand; if(!used.has(kk)){nx=cand;used.add(kk);break;} }
+              if(nx===-1) break;
+              cur=nx; steps++;
+            }
+            if(cur===su && loop.length>=3){
+              let cx=0,cy=0,cz=0; const n=loop.length;
+              for(const vi of loop){ cx+=gx(vi); cy+=gy(vi); cz+=gz(vi); }
+              const ci=baseN+extra.length/3;
+              extra.push(cx/n, cy/n, cz/n);
+              for(let i=0;i<n;i++){ const a=loop[i], b=loop[(i+1)%n]; faces.push([a,ci,b]); }
+            }
+          }
+        }
+      }
+
+      const totalV=baseN+extra.length/3;
+      const positions=new Float32Array(totalV*3);
+      positions.set(pos,0);
+      if(extra.length) positions.set(extra, pos.length);
+      const out=new Uint32Array(faces.length*3);
+      for(let f=0;f<faces.length;f++){ out[f*3]=faces[f][0]; out[f*3+1]=faces[f][1]; out[f*3+2]=faces[f][2]; }
+      return { indices: out, positions };
+    }
+
     self.onmessage = async (e) => {
       const d=e.data, id=d.id, positions=d.positions, targetError=d.targetError;
       const flags = d.lockBorder ? ['LockBorder'] : [];
@@ -396,11 +526,21 @@
             const t = (p===passes) ? target : Math.round(count*Math.pow(ratio,p/passes));
             const r = MeshoptSimplifier.simplify(idx, positions, 3, Math.max(4,t)*3, targetError, flags);
             idx=r[0]; err=r[1];
-            self.postMessage({ id, progress:p/passes });
+            self.postMessage({ id, progress:p/passes, stage:'simplify' });
           }
         }
         idx=cleanMesh(idx, positions);
-        self.postMessage({ id, ok:true, indices:idx, error:err }, [idx.buffer]);
+        let outPositions=null;
+        if(d.aggressive){
+          self.postMessage({ id, progress:0.97, stage:'repair' });
+          try{ const rep=repairMesh(idx, positions); idx=rep.indices; outPositions=rep.positions; }
+          catch(repErr){ /* keep the cleaned (un-repaired) mesh on failure */ }
+        }
+        const validity=countNonManifold(idx);
+        const msg={ id, ok:true, indices:idx, error:err, validity };
+        const transfer=[idx.buffer];
+        if(outPositions){ msg.positions=outPositions; transfer.push(outPositions.buffer); }
+        self.postMessage(msg, transfer);
       } catch (err) {
         self.postMessage({ id, ok:false, message: String((err && err.message) || err) });
       }
@@ -414,12 +554,12 @@
     }
     return simWorker;
   }
-  function simplifyInWorker(index, positions, targetFaces, targetError, lockBorder, onProgress){
+  function simplifyInWorker(index, positions, targetFaces, targetError, lockBorder, aggressive, onProgress){
     return new Promise((resolve,reject)=>{
       const w=getWorker(), id=++jobId;
       const onMsg=e=>{
         const d=e.data; if(d.id!==id) return;
-        if(d.progress!==undefined){ onProgress && onProgress(d.progress); return; }
+        if(d.progress!==undefined){ onProgress && onProgress(d.progress,d.stage); return; }
         w.removeEventListener('message',onMsg);
         d.ok ? resolve(d) : reject(new Error(d.message));
       };
@@ -427,7 +567,7 @@
       // copy buffers so the main-thread geometry keeps its own data after transfer
       const idx=index instanceof Uint32Array?index.slice():Uint32Array.from(index);
       const pos=positions instanceof Float32Array?positions.slice():Float32Array.from(positions);
-      w.postMessage({id,indices:idx,positions:pos,targetCount:targetFaces,targetError,lockBorder},
+      w.postMessage({id,indices:idx,positions:pos,targetCount:targetFaces,targetError,lockBorder,aggressive},
         [idx.buffer,pos.buffer]);
     });
   }
@@ -469,11 +609,12 @@
 
   // ---- decimate ----
   function keepRatio(){return +$('keep').value/100;}
+  const predictBytes=tris=>84+50*tris; // binary STL: 84-byte header + 50 bytes/triangle
   function updateTarget(){
-    $('keepVal').textContent=$('keep').value+'%';
-    if(!baseGeo){$('targetLine').textContent='טענו קובץ כדי לראות יעד';return;}
+    if(!baseGeo){$('keepVal').textContent='—';$('targetLine').textContent='טענו קובץ כדי לראות יעד';return;}
     const t=Math.max(4,Math.floor(origFaces*keepRatio()));
-    $('targetLine').innerHTML='יעד: <b>'+t.toLocaleString()+'</b> פאות (מתוך '+origFaces.toLocaleString()+')';
+    $('keepVal').textContent='≈ '+human(predictBytes(t));
+    $('targetLine').innerHTML='<b>'+t.toLocaleString()+'</b> פאות · '+$('keep').value+'% מהמקור';
   }
   function scaleFactor(){
     const v=+$('sizeInput').value;
@@ -509,13 +650,16 @@
       // Everything goes through the worker so the mesh cleanup always runs.
       const targetFaces=keep<1?Math.max(4,Math.floor(origFaces*keep)):faceCount(srcGeo);
       const lockBorder=$('lockBorder').checked;
+      const aggressive=$('aggressive').checked;
       const res=await simplifyInWorker(
-        srcGeo.index.array, srcGeo.attributes.position.array, targetFaces, 1, lockBorder,
-        p=>setProgress(Math.round(4+p*84),'מדלל פאות…'));
+        srcGeo.index.array, srcGeo.attributes.position.array, targetFaces, 1, lockBorder, aggressive,
+        (p,stage)=>setProgress(Math.round(4+p*84), stage==='repair'?'ממלא חורים…':'מדלל פאות…'));
 
       setProgress(92,'מייצא STL…');
       const g=new THREE.BufferGeometry();
-      g.setAttribute('position', srcGeo.attributes.position.clone());
+      // aggressive repair may add vertices → use the positions it returns; otherwise reuse the source's
+      const positions=res.positions ? res.positions : srcGeo.attributes.position.array.slice();
+      g.setAttribute('position', new THREE.BufferAttribute(positions,3));
       g.setIndex(new THREE.BufferAttribute(res.indices,1));
       g.computeVertexNormals();
       scene.remove(mesh);
@@ -530,7 +674,7 @@
         {type:'application/octet-stream'});
 
       setProgress(100,'הושלם');
-      showStats(faceCount(g),lastBlob.size);
+      showStats(faceCount(g),lastBlob.size,res.validity);
       $('dlBtn').disabled=false;
     }catch(e){
       console.error(e);
@@ -540,11 +684,15 @@
       $('runBtn').disabled=false;
     }
   }
-  function showStats(nFaces,nSize){
+  function showStats(nFaces,nSize,validity){
     $('fFrom').textContent=origFaces.toLocaleString();
     $('fTo').textContent=nFaces.toLocaleString();
     $('sFrom').textContent=human(origSize);
     $('sTo').textContent=human(nSize);
+    const v=$('vTo');
+    if(validity===0){ v.textContent='✓ תקין'; v.className='to ok'; }
+    else if(validity>0){ v.textContent=validity.toLocaleString()+' קצוות'; v.className='to warn'; }
+    else { v.textContent='—'; v.className='to'; }
     const cut=Math.round((1-nSize/origSize)*100);
     $('summary').innerHTML='הקטנה של <b>'+cut+'%</b> במשקל';
     $('stats').classList.add('show');
