@@ -317,7 +317,9 @@
         <summary><span>טיפים להדפסה</span><span class="chev">▸</span></summary>
         <div class="acc-body">
           אל תגזימו בדילול — פינות חדות מתעגלות. הגדירו את הגודל הסופי במ"מ, ובדקו ב‑slicer
-          לפני שליחה למדפסת.
+          לפני שליחה למדפסת.<br>
+          התצוגה מעמידה את המודל על הבסיס שלו אוטומטית; הקובץ המיוצא נשמר באוריינטציה המקורית
+          (שהסלייסר כבר מציב נכון).
         </div>
       </details>
     </aside>
@@ -360,7 +362,7 @@
   const mat=new THREE.MeshStandardMaterial({color:0x63d3c7,roughness:0.55,metalness:0.05,
     flatShading:false,wireframe:false});
   let mesh=null, baseGeo=null, origFaces=0, origSize=0, lastBlob=null, wire=false;
-  let origDims=new THREE.Vector3(1,1,1), origLongest=1;
+  let origDims=new THREE.Vector3(1,1,1), origLongest=1, displayQuat=new THREE.Quaternion();
 
   function resize(){
     const w=viewport.clientWidth,h=viewport.clientHeight;
@@ -455,7 +457,7 @@
       const gz=i=> i<baseN ? pos[i*3+2] : extra[(i-baseN)*3+2];
       const ekey=(u,v)=> u<v ? u+'_'+v : v+'_'+u;
 
-      for(let iter=0; iter<6; iter++){
+      for(let iter=0; iter<10; iter++){
         const em=new Map();
         for(let f=0;f<faces.length;f++){
           const t=faces[f];
@@ -481,14 +483,23 @@
         for(const [su,arr0] of next){
           for(const sv of arr0){
             const sk=su+'>'+sv; if(used.has(sk)) continue;
-            const loop=[su]; let cur=sv, steps=0; used.add(sk);
+            const loop=[su]; let cur=sv, prev=su, steps=0; used.add(sk);
             while(cur!==su && steps<200000){
               loop.push(cur);
               const outs=next.get(cur); if(!outs||!outs.length) break;
-              let nx=-1;
-              for(const cand of outs){ const kk=cur+'>'+cand; if(!used.has(kk)){nx=cand;used.add(kk);break;} }
+              // at pinch vertices a vertex has several boundary out-edges; pick the
+              // straightest continuation so each loop is traced as a simple polygon
+              const dx=gx(cur)-gx(prev), dy=gy(cur)-gy(prev), dz=gz(cur)-gz(prev);
+              const dl=Math.hypot(dx,dy,dz)||1;
+              let nx=-1, best=-Infinity;
+              for(const cand of outs){
+                if(used.has(cur+'>'+cand)) continue;
+                const ex=gx(cand)-gx(cur), ey=gy(cand)-gy(cur), ez=gz(cand)-gz(cur);
+                const el=Math.hypot(ex,ey,ez)||1, dot=(dx*ex+dy*ey+dz*ez)/(dl*el);
+                if(dot>best){ best=dot; nx=cand; }
+              }
               if(nx===-1) break;
-              cur=nx; steps++;
+              used.add(cur+'>'+nx); prev=cur; cur=nx; steps++;
             }
             if(cur===su && loop.length>=3){
               let cx=0,cy=0,cz=0; const n=loop.length;
@@ -572,6 +583,41 @@
     });
   }
 
+  // Pick the model's "up": the longest bounding-box axis, oriented so the end with
+  // the larger flat face (the base) sits at the bottom. Used to stand the model up
+  // in the viewer (display only — the exported STL keeps its original coordinates).
+  function computeStandingUp(pos){
+    let mn=[Infinity,Infinity,Infinity], mx=[-Infinity,-Infinity,-Infinity];
+    for(let i=0;i<pos.length;i+=3) for(let a=0;a<3;a++){ const v=pos[i+a]; if(v<mn[a])mn[a]=v; if(v>mx[a])mx[a]=v; }
+    const ext=[mx[0]-mn[0],mx[1]-mn[1],mx[2]-mn[2]];
+    let ax=0; if(ext[1]>ext[ax])ax=1; if(ext[2]>ext[ax])ax=2;
+    const span=ext[ax]||1, loT=mn[ax]+span*0.15, hiT=mx[ax]-span*0.15;
+    let bottomFlat=0, topFlat=0;
+    for(let i=0;i<pos.length;i+=9){
+      const ux=pos[i+3]-pos[i], uy=pos[i+4]-pos[i+1], uz=pos[i+5]-pos[i+2];
+      const vx=pos[i+6]-pos[i], vy=pos[i+7]-pos[i+1], vz=pos[i+8]-pos[i+2];
+      const nx=uy*vz-uz*vy, ny=uz*vx-ux*vz, nz=ux*vy-uy*vx;
+      const len=Math.hypot(nx,ny,nz)||1, na=(ax===0?nx:ax===1?ny:nz)/len;
+      if(Math.abs(na)<0.85) continue;                 // only faces parallel to the base plane
+      const cen=(pos[i+ax]+pos[i+3+ax]+pos[i+6+ax])/3;
+      if(cen<=loT) bottomFlat+=len; else if(cen>=hiT) topFlat+=len;
+    }
+    const up=[0,0,0]; up[ax]= (bottomFlat>=topFlat) ? 1 : -1;  // up points from base toward body
+    return up;
+  }
+  // Build the preview mesh from a geometry given in export coordinates: clone it,
+  // rotate to stand upright, and drop it onto the grid. Export geometry is untouched.
+  function showMeshGeo(geo, doFrame){
+    const dg=geo.clone();
+    dg.applyQuaternion(displayQuat);
+    dg.computeBoundingBox();
+    const bb=dg.boundingBox;
+    dg.translate(-(bb.min.x+bb.max.x)/2, -bb.min.y, -(bb.min.z+bb.max.z)/2);
+    if(mesh) scene.remove(mesh);
+    mesh=new THREE.Mesh(dg, mat.clone()); mesh.material.wireframe=wire; scene.add(mesh);
+    if(doFrame) frame(dg);
+  }
+
   // ---- load ----
   function loadBuffer(buf,size,name){
     let geo;
@@ -586,8 +632,9 @@
     baseGeo.boundingBox.getSize(origDims);
     origLongest=Math.max(origDims.x,origDims.y,origDims.z)||1;
 
-    if(mesh) scene.remove(mesh);
-    mesh=new THREE.Mesh(baseGeo.clone(),mat); scene.add(mesh); frame(baseGeo);
+    const up=new THREE.Vector3().fromArray(computeStandingUp(baseGeo.attributes.position.array)).normalize();
+    displayQuat.setFromUnitVectors(up, new THREE.Vector3(0,1,0));
+    showMeshGeo(baseGeo, true);
 
     overlay.classList.add('hidden');
     $('fileChip').classList.add('show');
@@ -662,16 +709,17 @@
       g.setAttribute('position', new THREE.BufferAttribute(positions,3));
       g.setIndex(new THREE.BufferAttribute(res.indices,1));
       g.computeVertexNormals();
-      scene.remove(mesh);
-      mesh=new THREE.Mesh(g,mat.clone()); mesh.material.wireframe=wire; scene.add(mesh);
 
-      // apply the chosen export size as a uniform scale (export only; preview stays as-is)
+      // export from g (original coordinates) with the chosen size as a uniform scale
       const exportMesh=new THREE.Mesh(g,mat);
       exportMesh.scale.setScalar(scaleFactor());
       exportMesh.updateMatrixWorld(true);
       const result=new STLExporter().parse(exportMesh,{binary:true});
       lastBlob=new Blob([result instanceof DataView?result.buffer:result],
         {type:'application/octet-stream'});
+
+      // preview: stand the result upright (display only; export above is untouched)
+      showMeshGeo(g, false);
 
       setProgress(100,'הושלם');
       showStats(faceCount(g),lastBlob.size,res.validity);
