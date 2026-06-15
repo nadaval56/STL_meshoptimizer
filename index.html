@@ -366,7 +366,7 @@
   let mesh=null, baseGeo=null, origFaces=0, origSize=0, lastBlob=null, wire=false;
   let origDims=new THREE.Vector3(1,1,1), origLongest=1, displayQuat=new THREE.Quaternion();
   let userRot=new THREE.Quaternion(), lastShownGeo=null;
-  const VERSION='2026-06-15·v7';
+  const VERSION='2026-06-15·v8';
   $('verTag').textContent=VERSION;
 
   function resize(){
@@ -496,37 +496,44 @@
 
         const cnt=new Map();
         for(let f=0;f<faces.length;f++){ const t=faces[f]; for(let e=0;e<3;e++){ const k=ekey(t[e],t[(e+1)%3]); cnt.set(k,(cnt.get(k)||0)+1); } }
-        const next=new Map(); let nb=0;
+        // undirected boundary adjacency: winding near boolean scars is often
+        // inconsistent, so the half-edge direction can't be trusted for walking
+        const adj=new Map(); let nb=0;
         for(let f=0;f<faces.length;f++){
           const t=faces[f];
           for(let e=0;e<3;e++){ const u=t[e], v=t[(e+1)%3];
-            if(cnt.get(ekey(u,v))===1){ let a=next.get(u); if(!a){a=[];next.set(u,a);} a.push(v); nb++; } }
+            if(cnt.get(ekey(u,v))===1){
+              let au=adj.get(u); if(!au){au=[];adj.set(u,au);} au.push(v);
+              let av=adj.get(v); if(!av){av=[];adj.set(v,av);} av.push(u);
+              nb++;
+            }
+          }
         }
         if(nb===0) break;
 
-        const used=new Set();
-        for(const [su,arr0] of next){
-          for(const sv of arr0){
-            const sk=su+'>'+sv; if(used.has(sk)) continue;
-            const loop=[su]; let cur=sv, prev=su, steps=0; used.add(sk);
-            while(cur!==su && steps<200000){
+        const usedE=new Set();
+        for(const [s0,nbrs0] of adj){
+          for(const s1 of nbrs0){
+            if(usedE.has(ekey(s0,s1))) continue;
+            usedE.add(ekey(s0,s1));
+            const loop=[s0]; let cur=s1, prev=s0, steps=0;
+            while(cur!==s0 && steps<200000){
               loop.push(cur);
-              const outs=next.get(cur); if(!outs||!outs.length) break;
-              // at pinch vertices a vertex has several boundary out-edges; pick the
-              // straightest continuation so each loop is traced as a simple polygon
+              const nbrs=adj.get(cur); if(!nbrs) break;
+              // pick an unused boundary edge; at pinch vertices prefer the straightest turn
               const dx=gx(cur)-gx(prev), dy=gy(cur)-gy(prev), dz=gz(cur)-gz(prev);
               const dl=Math.hypot(dx,dy,dz)||1;
               let nx=-1, best=-Infinity;
-              for(const cand of outs){
-                if(used.has(cur+'>'+cand)) continue;
-                const ex=gx(cand)-gx(cur), ey=gy(cand)-gy(cur), ez=gz(cand)-gz(cur);
+              for(const w of nbrs){
+                if(usedE.has(ekey(cur,w))) continue;
+                const ex=gx(w)-gx(cur), ey=gy(w)-gy(cur), ez=gz(w)-gz(cur);
                 const el=Math.hypot(ex,ey,ez)||1, dot=(dx*ex+dy*ey+dz*ez)/(dl*el);
-                if(dot>best){ best=dot; nx=cand; }
+                if(dot>best){ best=dot; nx=w; }
               }
               if(nx===-1) break;
-              used.add(cur+'>'+nx); prev=cur; cur=nx; steps++;
+              usedE.add(ekey(cur,nx)); prev=cur; cur=nx; steps++;
             }
-            if(cur===su && loop.length>=3){
+            if(cur===s0 && loop.length>=3){
               let cx=0,cy=0,cz=0; const n=loop.length;
               for(const vi of loop){ cx+=gx(vi); cy+=gy(vi); cz+=gz(vi); }
               const ci=baseN+extra.length/3;
@@ -608,29 +615,10 @@
     });
   }
 
-  // Pick the model's "up": the longest bounding-box axis, oriented so the FLATTEST
-  // end (the base — e.g. shoe soles, far flatter than a head) sits at the bottom.
-  // Display only — the exported STL keeps its original coordinates.
-  function computeStandingUp(pos){
-    let mn=[Infinity,Infinity,Infinity], mx=[-Infinity,-Infinity,-Infinity];
-    for(let i=0;i<pos.length;i+=3) for(let a=0;a<3;a++){ const v=pos[i+a]; if(v<mn[a])mn[a]=v; if(v>mx[a])mx[a]=v; }
-    const ext=[mx[0]-mn[0],mx[1]-mn[1],mx[2]-mn[2]];
-    let ax=0; if(ext[1]>ext[ax])ax=1; if(ext[2]>ext[ax])ax=2;
-    const span=ext[ax]||1, band=span*0.04;            // thin slab right at each extreme
-    const loEdge=mn[ax]+band, hiEdge=mx[ax]-band;
-    let bottomFlat=0, topFlat=0;
-    for(let i=0;i<pos.length;i+=9){
-      const ux=pos[i+3]-pos[i], uy=pos[i+4]-pos[i+1], uz=pos[i+5]-pos[i+2];
-      const vx=pos[i+6]-pos[i], vy=pos[i+7]-pos[i+1], vz=pos[i+8]-pos[i+2];
-      const nx=uy*vz-uz*vy, ny=uz*vx-ux*vz, nz=ux*vy-uy*vx;
-      const len=Math.hypot(nx,ny,nz)||1, na=(ax===0?nx:ax===1?ny:nz)/len;
-      if(Math.abs(na)<0.5) continue;                  // only faces roughly parallel to the base plane
-      const cen=(pos[i+ax]+pos[i+3+ax]+pos[i+6+ax])/3;
-      if(cen<=loEdge) bottomFlat+=len; else if(cen>=hiEdge) topFlat+=len;
-    }
-    const up=[0,0,0]; up[ax]= (bottomFlat>=topFlat) ? 1 : -1;  // up points from base toward body
-    return up;
-  }
+  // Printable STLs follow the +Z-up convention (model rests on the Z=0 plate), so
+  // stand the model up in our Y-up viewer by mapping +Z to +Y. This matches how the
+  // slicer places it; the manual "rotate" button covers any non-standard file.
+  function computeStandingUp(pos){ return [0,0,1]; }
   // Build the preview mesh from a geometry given in export coordinates: clone it,
   // rotate to stand upright, and drop it onto the grid. Export geometry is untouched.
   function showMeshGeo(geo, doFrame){
